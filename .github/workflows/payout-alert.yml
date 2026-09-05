@@ -1,3 +1,4 @@
+```yaml
 name: PSX Payout Alert
 
 on:
@@ -28,3 +29,18 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           python payout_alert.py
+
+      - name: Save duplicate prevention data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add sent_alerts.json
+
+          if git diff --cached --quiet; then
+            echo "No new sent alerts to save."
+          else
+            git commit -m "Update sent payout alerts"
+            git push
+          fi
+```
