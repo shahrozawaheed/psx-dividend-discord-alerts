@@ -21,5 +21,7 @@ jobs:
           pip install requests beautifulsoup4
 
       - name: Run payout bot
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
           python payout_alert.py
