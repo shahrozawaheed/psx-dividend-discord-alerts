@@ -1,4 +1,3 @@
-```yaml
 name: PSX Payout Alert
 
 on:
@@ -6,6 +5,9 @@ on:
 
   schedule:
     - cron: '0 12 * * 1-5'
+
+permissions:
+  contents: write
 
 jobs:
   payout-alert:
@@ -43,4 +45,3 @@ jobs:
             git commit -m "Update sent payout alerts"
             git push
           fi
-```
