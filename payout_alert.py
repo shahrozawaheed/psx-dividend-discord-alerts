@@ -1,9 +1,14 @@
+import os
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from zoneinfo import ZoneInfo
+import time
 
 PSX_URL = "https://dps.psx.com.pk/payouts"
+
+# Discord webhook stored safely in GitHub Secrets
+DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
 # Pakistan timezone
 pakistan_time = datetime.now(ZoneInfo("Asia/Karachi"))
@@ -12,109 +17,162 @@ today = pakistan_time.date()
 print("PSX Dividend Alert Bot Started")
 print("Pakistan Date:", today)
 
-all_today_announcements = []
+# Check Discord webhook
+if not DISCORD_WEBHOOK_URL:
+    print("ERROR: DISCORD_WEBHOOK_URL secret is missing.")
+    raise SystemExit(1)
 
-# PSX shows 25 records per page
-count = 25
-offset = 0
+# Get PSX data
+response = None
 
-while True:
+for attempt in range(1, 4):
 
-    print(f"Fetching records: offset={offset}")
+    print(f"Request attempt: {attempt}")
 
-    response = requests.post(
-        PSX_URL,
-        data={
-            "symbol": "",
-            "count": count,
-            "offset": offset
-        },
-        timeout=30
-    )
+    try:
+        response = requests.post(
+            PSX_URL,
+            data={
+                "symbol": "",
+                "count": 25,
+                "offset": 0
+            },
+            timeout=30
+        )
 
-    print("PSX Response Status:", response.status_code)
+        print("PSX Response Status:", response.status_code)
 
-    if response.status_code != 200:
-        print("Failed to get PSX data")
-        break
+        if response.status_code == 200:
+            break
 
-    soup = BeautifulSoup(response.text, "html.parser")
+        print("PSX request failed. Retrying...")
 
-    table = soup.find("table", id="announcementsTable")
+    except requests.RequestException as error:
+        print("Request error:", error)
 
-    if not table:
-        print("Payout table not found")
-        break
+    time.sleep(5)
 
-    tbody = table.find("tbody")
 
-    if not tbody:
-        print("Table body not found")
-        break
+if response is None or response.status_code != 200:
+    print("PSX data could not be retrieved.")
+    raise SystemExit(1)
 
-    rows = tbody.find_all("tr")
 
-    print(f"Records found on this page: {len(rows)}")
+# Parse PSX HTML
+soup = BeautifulSoup(response.text, "html.parser")
 
-    # Stop if there are no more records
-    if len(rows) == 0:
-        break
+table = soup.find("table", id="announcementsTable")
 
-    for row in rows:
+if not table:
+    print("Payout table not found.")
+    raise SystemExit(1)
 
-        columns = row.find_all("td")
+tbody = table.find("tbody")
 
-        if len(columns) >= 6:
+if not tbody:
+    print("Table body not found.")
+    raise SystemExit(1)
 
-            symbol = columns[0].get_text(strip=True)
-            company = columns[1].get_text(strip=True)
-            sector = columns[2].get_text(strip=True)
-            dividend = columns[3].get_text(strip=True)
-            announcement_date = columns[4].get_text(" ", strip=True)
-            book_closure = columns[5].get_text(" ", strip=True)
+rows = tbody.find_all("tr")
 
-            try:
-                announcement_datetime = datetime.strptime(
-                    announcement_date,
-                    "%B %d, %Y %I:%M %p"
-                )
+print(f"Found {len(rows)} payout records")
 
-                announcement_date_only = announcement_datetime.date()
 
-            except ValueError:
-                print("Could not parse date:", announcement_date)
-                continue
+today_announcements = []
 
-            # Only today's announcements
-            if announcement_date_only == today:
 
-                announcement = {
-                    "symbol": symbol,
-                    "company": company,
-                    "sector": sector,
-                    "dividend": dividend,
-                    "announcement_date": announcement_date,
-                    "book_closure": book_closure
-                }
+# Read PSX records
+for row in rows:
 
-                all_today_announcements.append(announcement)
+    columns = row.find_all("td")
 
-    # Move to next page
-    offset += count
+    if len(columns) < 6:
+        continue
+
+    symbol = columns[0].get_text(strip=True)
+    company = columns[1].get_text(strip=True)
+    sector = columns[2].get_text(strip=True)
+    dividend = columns[3].get_text(strip=True)
+    announcement_date = columns[4].get_text(" ", strip=True)
+    book_closure = columns[5].get_text(" ", strip=True)
+
+    # Parse announcement date
+    try:
+
+        announcement_datetime = datetime.strptime(
+            announcement_date,
+            "%B %d, %Y %I:%M %p"
+        )
+
+    except ValueError:
+
+        print("Could not parse date:", announcement_date)
+        continue
+
+    announcement_date_only = announcement_datetime.date()
+
+    # Only today's announcements
+    if announcement_date_only == today:
+
+        today_announcements.append({
+            "symbol": symbol,
+            "company": company,
+            "sector": sector,
+            "dividend": dividend,
+            "announcement_date": announcement_date,
+            "book_closure": book_closure
+        })
 
 
 print("--------------------------------")
 print(
     f"Total announcements for {today}: "
-    f"{len(all_today_announcements)}"
+    f"{len(today_announcements)}"
 )
+print("--------------------------------")
 
-for announcement in all_today_announcements:
 
-    print("--------------------------------")
-    print("Symbol:", announcement["symbol"])
-    print("Company:", announcement["company"])
-    print("Sector:", announcement["sector"])
-    print("Dividend:", announcement["dividend"])
-    print("Announcement:", announcement["announcement_date"])
-    print("Book Closure:", announcement["book_closure"])
+# Send today's announcements to Discord
+for announcement in today_announcements:
+
+    message = (
+        f"Symbol: {announcement['symbol']}\n"
+        f"Company: {announcement['company']}\n"
+        f"Sector: {announcement['sector']}\n"
+        f"Dividend: {announcement['dividend']}\n"
+        f"Date / Time of Announcement: "
+        f"{announcement['announcement_date']}\n"
+        f"Book Closure Date: {announcement['book_closure']}"
+    )
+
+    discord_response = requests.post(
+        DISCORD_WEBHOOK_URL,
+        json={
+            "content": message
+        },
+        timeout=30
+    )
+
+    print(
+        f"Discord response for {announcement['symbol']}: "
+        f"{discord_response.status_code}"
+    )
+
+    if discord_response.status_code in (200, 204):
+        print(
+            f"Successfully sent {announcement['symbol']} "
+            "to Discord."
+        )
+    else:
+        print(
+            f"Failed to send {announcement['symbol']} "
+            "to Discord."
+        )
+        print(discord_response.text)
+
+    # Small delay between Discord messages
+    time.sleep(1)
+
+
+print("--------------------------------")
+print("PSX Dividend Alert Bot Finished")
