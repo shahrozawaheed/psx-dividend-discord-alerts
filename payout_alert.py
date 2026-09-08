@@ -12,8 +12,12 @@ SENT_FILE = "sent_alerts.json"
 
 DISCORD_WEBHOOK_URL = os.getenv("DISCORD_WEBHOOK_URL")
 
+# Pakistan date
 pakistan_time = datetime.now(ZoneInfo("Asia/Karachi"))
 today = pakistan_time.date()
+
+# Display date for Discord title only
+display_date = pakistan_time.strftime("%B %d, %Y")
 
 print("PSX Dividend Alert Bot Started")
 print("Pakistan Date:", today)
@@ -22,6 +26,7 @@ if not DISCORD_WEBHOOK_URL:
     print("ERROR: DISCORD_WEBHOOK_URL secret is missing.")
     raise SystemExit(1)
 
+# Load previously sent alerts
 if os.path.exists(SENT_FILE):
     try:
         with open(SENT_FILE, "r", encoding="utf-8") as file:
@@ -36,6 +41,7 @@ print("Previously sent alerts:", len(sent_alerts))
 
 response = None
 
+# Get PSX payout data
 for attempt in range(1, 4):
 
     print(f"Request attempt: {attempt}")
@@ -87,6 +93,7 @@ print(f"Found {len(rows)} payout records")
 
 today_announcements = []
 
+# Read today's announcements
 for row in rows:
 
     columns = row.find_all("td")
@@ -94,6 +101,7 @@ for row in rows:
     if len(columns) < 6:
         continue
 
+    # Keep values EXACTLY as PSX provides them
     symbol = columns[0].get_text(strip=True)
     company = columns[1].get_text(strip=True)
     sector = columns[2].get_text(strip=True)
@@ -101,6 +109,7 @@ for row in rows:
     announcement_date = columns[4].get_text(" ", strip=True)
     book_closure = columns[5].get_text(" ", strip=True)
 
+    # Parse date only for filtering
     try:
         announcement_datetime = datetime.strptime(
             announcement_date,
@@ -131,7 +140,8 @@ print(
 )
 print("--------------------------------")
 
-new_alerts_sent = False
+# Find NEW announcements
+new_announcements = []
 
 for announcement in today_announcements:
 
@@ -163,27 +173,48 @@ for announcement in today_announcements:
 
         continue
 
-    message = (
-        f"Symbol: {announcement['symbol']}\n"
-        f"Company: {announcement['company']}\n"
-        f"Sector: {announcement['sector']}\n"
-        f"Dividend: {announcement['dividend']}\n"
-        f"Date / Time of Announcement: "
-        f"{announcement['announcement_date']}\n"
-        f"Book Closure Date: {announcement['book_closure']}"
-    )
+    new_announcements.append({
+        "announcement": announcement,
+        "alert_id": alert_id
+    })
 
+# Stop if there are no new announcements
+if not new_announcements:
+
+    print("No new alerts were found.")
+
+else:
+
+    # ONE Discord message
+    message = f"**Payouts | {display_date}**\n\n"
+
+    for item in new_announcements:
+
+        announcement = item["announcement"]
+
+        message += (
+            f"**{announcement['symbol']}**\n"
+            f"Company: {announcement['company']}\n"
+            f"Sector: {announcement['sector']}\n"
+            f"Dividend: {announcement['dividend']}\n"
+            f"Date / Time of Announcement: "
+            f"{announcement['announcement_date']}\n"
+            f"Book Closure Date: {announcement['book_closure']}\n"
+            f"\n"
+        )
+
+    # Send ONE message
     discord_response = requests.post(
         DISCORD_WEBHOOK_URL,
         json={
-            "content": message
+            "content": message,
+            "flags": 4
         },
         timeout=30
     )
 
     print(
-        f"Discord response for "
-        f"{announcement['symbol']}: "
+        f"Discord response: "
         f"{discord_response.status_code}"
     )
 
@@ -191,43 +222,31 @@ for announcement in today_announcements:
 
         print(
             f"Successfully sent "
-            f"{announcement['symbol']} "
-            "to Discord."
+            f"{len(new_announcements)} payout(s) "
+            "in ONE Discord message."
         )
 
-        sent_alerts.add(alert_id)
-        new_alerts_sent = True
+        # Mark as sent only after successful Discord delivery
+        for item in new_announcements:
+            sent_alerts.add(item["alert_id"])
+
+        with open(SENT_FILE, "w", encoding="utf-8") as file:
+
+            json.dump(
+                sorted(sent_alerts),
+                file,
+                indent=2
+            )
+
+        print(
+            f"Saved {len(sent_alerts)} sent alerts "
+            "to sent_alerts.json"
+        )
 
     else:
 
-        print(
-            f"Failed to send "
-            f"{announcement['symbol']} "
-            "to Discord."
-        )
-
+        print("Failed to send payouts to Discord.")
         print(discord_response.text)
-
-    time.sleep(1)
-
-if new_alerts_sent:
-
-    with open(SENT_FILE, "w", encoding="utf-8") as file:
-
-        json.dump(
-            sorted(sent_alerts),
-            file,
-            indent=2
-        )
-
-    print(
-        f"Saved {len(sent_alerts)} sent alerts "
-        "to sent_alerts.json"
-    )
-
-else:
-
-    print("No new alerts were sent.")
 
 print("--------------------------------")
 print("PSX Dividend Alert Bot Finished")
